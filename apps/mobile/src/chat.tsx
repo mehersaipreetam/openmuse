@@ -698,7 +698,7 @@ export function ChatScreen({
           Latest messages
         </Button>
       )}
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <KeyboardAvoidingView behavior={Platform.OS === "web" ? undefined : "padding"}>
         <ErrorNotice error={saveError} />
         {!!saveError && (
           <Button
