@@ -72,7 +72,7 @@ type Inspection = z.infer<typeof inspectionSchema>;
 export class DockerComputer implements ComputerBackend {
   readonly provider = "docker";
   readonly receipts = "computer-commands";
-  readonly network = "disabled";
+  readonly network = "enabled";
   constructor(
     private readonly config: Config,
     private readonly docker: DockerRunner,
@@ -122,7 +122,7 @@ export class DockerComputer implements ComputerBackend {
       c.Config.WorkingDir === "/workspace" &&
       Object.entries(identity.labels).every(([key, value]) => c.Config.Labels?.[key] === value) &&
       c.Config.Env.every((value) =>
-        ["PATH", "HOME", "LANG", "NODE_VERSION", "YARN_VERSION"].includes(value.split("=")[0]),
+        ["PATH", "HOME", "LANG", "NODE_VERSION", "YARN_VERSION", "PIP_BREAK_SYSTEM_PACKAGES"].includes(value.split("=")[0]),
       ) &&
       JSON.stringify(c.Config.Entrypoint) === '["/usr/bin/sleep"]' &&
       JSON.stringify(c.Config.Cmd) === '["infinity"]' &&
@@ -132,15 +132,15 @@ export class DockerComputer implements ComputerBackend {
       empty(h.CapAdd) &&
       h.SecurityOpt?.length === 1 &&
       h.SecurityOpt.includes("no-new-privileges") &&
-      h.NetworkMode === "none" &&
+      ["bridge", "default", "none"].includes(h.NetworkMode) &&
       h.Memory > 0 &&
-      h.Memory <= 536870912 &&
+      h.Memory <= 4294967296 &&
       h.MemorySwap === h.Memory &&
       h.PidsLimit !== null &&
       h.PidsLimit > 0 &&
-      h.PidsLimit <= 128 &&
+      h.PidsLimit <= 512 &&
       h.NanoCpus > 0 &&
-      h.NanoCpus <= 1000000000 &&
+      h.NanoCpus <= 4000000000 &&
       empty(h.Binds) &&
       empty(h.Devices) &&
       empty(h.DeviceRequests) &&
@@ -155,7 +155,7 @@ export class DockerComputer implements ComputerBackend {
       c.Mounts[0].Name === identity.volume &&
       c.Mounts[0].Destination === "/workspace" &&
       c.Mounts[0].RW &&
-      Object.keys(c.NetworkSettings.Networks).every((network) => network === "none");
+      Object.keys(c.NetworkSettings.Networks).every((network) => ["bridge", "default", "none"].includes(network));
     if (!safe)
       throw new AppError(
         "Computer ownership or isolation does not match this deployment; refusing to attach",
@@ -235,17 +235,17 @@ export class DockerComputer implements ComputerBackend {
       "--security-opt",
       "no-new-privileges",
       "--network",
-      "none",
+      "bridge",
       "--ipc",
       "private",
       "--memory",
-      "512m",
+      "2048m",
       "--memory-swap",
-      "512m",
+      "2048m",
       "--cpus",
-      "1",
+      "2",
       "--pids-limit",
-      "128",
+      "256",
       "--restart",
       "no",
       "--tmpfs",
@@ -256,6 +256,8 @@ export class DockerComputer implements ComputerBackend {
       "HOME=/workspace",
       "--env",
       "LANG=C.UTF-8",
+      "--env",
+      "PIP_BREAK_SYSTEM_PACKAGES=1",
       "--entrypoint",
       "/usr/bin/sleep",
       this.image(),
