@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { MessageSchema } from "@ag-ui/core";
 import { CopilotKitIntelligence } from "@copilotkit/runtime/v2";
 import { Hono } from "hono";
@@ -44,10 +47,10 @@ export async function createApp(
   const intelligence = new CopilotKitIntelligence({ apiKey: config.intelligenceApiKey });
   const runtime = makeRuntime(config, agent, auth, intelligence);
   const app = new Hono<{ Variables: { owner: string } }>();
-  const origins = new Set([...config.allowedOrigins, new URL(config.publicUrl).origin]);
+  const origins = new Set([...config.allowedOrigins, new URL(config.publicUrl).origin, "null"]);
   app.use("*", async (c, next) => {
     const origin = c.req.header("origin");
-    if (origin && !origins.has(origin)) return c.json({ error: "Origin is not allowed" }, 403);
+    if (config.mode !== "sample" && origin && !origins.has(origin)) return c.json({ error: "Origin is not allowed" }, 403);
     c.header("X-Content-Type-Options", "nosniff");
     c.header("Referrer-Policy", "no-referrer");
     c.header("Cache-Control", "no-store");
@@ -56,7 +59,7 @@ export async function createApp(
   app.use(
     "*",
     cors({
-      origin: (origin) => (origins.has(origin) ? origin : undefined),
+      origin: (origin) => (config.mode === "sample" || (origin && origins.has(origin)) ? origin : undefined),
       allowHeaders: ["Content-Type", "Authorization"],
       allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
       credentials: true,
@@ -204,13 +207,16 @@ export async function createApp(
   });
   app.get("/api/main-thread", async (c) => {
     const owner = c.get("owner");
-    await db.insertIfAbsent(owner, "conversation-settings", {
-      id: "main",
-      threadId: randomUUID(),
-      existing: false,
-    });
-    const main = await db.get<{ threadId: string }>(owner, "conversation-settings", "main");
-    if (!main) throw new AppError("Main conversation could not be loaded", 503);
+    let main = await db.get<{ threadId: string; existing?: boolean }>(owner, "conversation-settings", "main");
+    if (!main || c.req.query("fresh") === "true") {
+      const fresh = {
+        id: "main",
+        threadId: randomUUID(),
+        existing: false,
+      };
+      await db.put(owner, "conversation-settings", fresh);
+      main = fresh;
+    }
     try {
       await intelligence.getOrCreateThread({
         threadId: main.threadId,
@@ -223,7 +229,7 @@ export async function createApp(
         502,
       );
     }
-    return c.json({ threadId: main.threadId, existing: true });
+    return c.json({ threadId: main.threadId, existing: Boolean(main.existing) });
   });
   app.get("/api/conversation", async (c) =>
     c.json((await db.get(c.get("owner"), "conversations", "default")) ?? { messages: [] }),
@@ -326,7 +332,7 @@ export async function createApp(
     await browser.input(c.get("owner"), c.req.param("id"), await c.req.json());
     return c.json({ ok: true });
   });
-  app.all("/api/copilotkit/*", async (c) => {
+  const copilotHandler = async (c: any) => {
     if (!agentConfigured(config))
       throw new AppError(
         "Configure a model and provider API key, or a valid AG-UI endpoint, to start chat",
@@ -343,9 +349,69 @@ export async function createApp(
       }),
     );
     return new Response(body, { status: response.status, headers: response.headers });
+  };
+  app.all("/api/copilotkit", copilotHandler);
+  app.all("/api/copilotkit/*", copilotHandler);
+  app.get("/openmuse.apk", async (c) => {
+    const apkPath = resolve(process.cwd(), "apps/mobile/android/app/build/outputs/apk/release/app-release.apk");
+    if (!existsSync(apkPath)) return c.text("APK not built", 404);
+    const file = await readFile(apkPath);
+    c.header("Content-Type", "application/vnd.android.package-archive");
+    c.header("Content-Disposition", 'attachment; filename="openmuse.apk"');
+    c.header("Content-Length", file.byteLength.toString());
+    c.header("Accept-Ranges", "bytes");
+    c.header("Cache-Control", "public, max-age=3600");
+    return c.body(file);
   });
-  app.get("/", (c) =>
-    c.json({ name: "OpenMuse", app: "http://localhost:8081", health: "/api/health" }),
-  );
+  app.get("/", (c) => {
+    const accept = c.req.header("accept") || "";
+    if (accept.includes("text/html")) {
+      const proto = c.req.header("x-forwarded-proto") || (c.req.header("host")?.includes("trycloudflare.com") ? "https" : new URL(c.req.url).protocol.replace(":", ""));
+      const host = c.req.header("host") || new URL(c.req.url).host;
+      const origin = `${proto}://${host}`;
+      const deepLink = `openmuse://connect?url=${encodeURIComponent(origin)}`;
+      return c.html(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenMuse — Connected</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 24px; display: flex; align-items: center; justify-content: center; min-height: 90vh; }
+    .card { background: #1e293b; border-radius: 16px; padding: 32px 24px; max-width: 400px; width: 100%; text-align: center; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
+    h1 { font-size: 26px; margin: 0 0 8px; color: #38bdf8; }
+    p { color: #94a3b8; font-size: 14px; margin: 0 0 24px; line-height: 1.5; }
+    .btn { display: block; width: 100%; padding: 14px 0; margin-bottom: 12px; border-radius: 10px; font-size: 16px; font-weight: 600; text-decoration: none; box-sizing: border-box; transition: transform 0.1s ease; }
+    .btn:active { transform: scale(0.98); }
+    .btn-primary { background: #0284c7; color: white; border: none; }
+    .btn-secondary { background: #334155; color: #e2e8f0; border: none; }
+    .url-box { background: #0f172a; border-radius: 8px; padding: 10px; font-family: monospace; font-size: 12px; word-break: break-all; color: #38bdf8; margin: 16px 0; border: 1px solid #334155; user-select: all; }
+    .copy-btn { background: transparent; border: 1px solid #475569; color: #94a3b8; padding: 6px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🌟 OpenMuse is Live</h1>
+    <p>Your personal AI agent pipeline is running and accessible.</p>
+    <a href="${deepLink}" class="btn btn-primary">📱 Open in OpenMuse App</a>
+    <a href="/openmuse.apk" class="btn btn-secondary">⬇️ Download Android APK (49 MB)</a>
+    <div style="margin-top: 20px;">
+      <p style="margin-bottom: 6px; font-size: 12px;">Server URL (for app Welcome screen):</p>
+      <div class="url-box" id="url">${origin}</div>
+      <button class="copy-btn" onclick="navigator.clipboard.writeText('${origin}'); this.innerText='✓ Copied!'; setTimeout(()=>this.innerText='Copy URL', 2000);">Copy URL</button>
+    </div>
+  </div>
+  <script>
+    if (/Android/i.test(navigator.userAgent)) {
+      setTimeout(function() {
+        window.location.href = "${deepLink}";
+      }, 400);
+    }
+  </script>
+</body>
+</html>`);
+    }
+    return c.json({ name: "OpenMuse", app: "http://localhost:8081", health: "/api/health", apk: "/openmuse.apk" });
+  });
   return { app, auth, files, actions, workspace, agent, computer };
 }

@@ -16,6 +16,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   AppState,
+  Linking,
+  Platform,
   Pressable,
   ScrollView,
   Text,
@@ -32,7 +34,7 @@ import {
   IdeasScreen,
 } from "./src/agent-ui";
 import { AgentWorkspaceProvider, useAgentWorkspace } from "./src/agent-workspace";
-import { API_URL, createSession, MuseApi } from "./src/api";
+import { API_URL, createSession, MuseApi, setApiUrl } from "./src/api";
 import { ChatScreen, WorkspaceTools } from "./src/chat";
 import { ComputerEntry } from "./src/computer";
 import { ComputerDraftProvider } from "./src/computer-drafts";
@@ -69,9 +71,12 @@ const titles: Partial<Record<Section, { title: string; subtitle: string }>> = {
 export default function App() {
   const [token, setToken] = useState("");
   const [accessKey, setAccessKey] = useState("");
-  const [busy, setBusy] = useState(true);
+  const [serverUrl, setServerUrl] = useState(Platform.OS === "android" ? "" : API_URL);
+  const [busy, setBusy] = useState(Platform.OS !== "android");
   const [error, setError] = useState("");
-  const connect = useCallback(async (key?: string) => {
+  const connect = useCallback(async (key?: string, url?: string) => {
+    const targetUrl = url || serverUrl || API_URL;
+    if (targetUrl) setApiUrl(targetUrl);
     setBusy(true);
     setError("");
     try {
@@ -82,9 +87,37 @@ export default function App() {
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [serverUrl]);
+
+  const handleDeepLink = useCallback(
+    (rawUrl: string | null) => {
+      if (!rawUrl) return;
+      try {
+        const match = rawUrl.match(/[?&](?:url|server)=([^&]+)/);
+        let target = match ? decodeURIComponent(match[1]) : "";
+        if (!target) {
+          const parsed = new URL(rawUrl);
+          target = parsed.searchParams.get("url") || parsed.searchParams.get("server") || "";
+        }
+        if (target) {
+          setServerUrl(target);
+          void connect(undefined, target);
+        }
+      } catch {}
+    },
+    [connect],
+  );
+
   useEffect(() => {
-    void connect();
+    void Linking.getInitialURL().then(handleDeepLink);
+    const sub = Linking.addEventListener("url", (e) => handleDeepLink(e.url));
+    return () => sub.remove();
+  }, [handleDeepLink]);
+
+  useEffect(() => {
+    if (Platform.OS !== "android") {
+      void connect();
+    }
   }, [connect]);
   return (
     <SafeAreaProvider>
@@ -120,18 +153,25 @@ export default function App() {
               <Card style={{ width: "100%" }}>
                 <ErrorNotice error={error} />
                 <Field
+                  label="Server URL"
+                  value={serverUrl}
+                  onChangeText={setServerUrl}
+                  placeholder="https://... or http://127.0.0.1:8787"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <Field
                   label="Workspace access key"
                   value={accessKey}
                   onChangeText={setAccessKey}
                   secureTextEntry
                   placeholder="Required for a live workspace"
                 />
-                <Button primary onPress={() => void connect(accessKey || undefined)}>
+                <Button primary onPress={() => void connect(accessKey || undefined, serverUrl)}>
                   Open workspace
                 </Button>
                 <Text style={[s.small, { marginTop: 15 }]}>
-                  Local workspaces open without a key. Make sure your OpenMuse server is running at{" "}
-                  {API_URL}.
+                  Target: {serverUrl || API_URL}
                 </Text>
               </Card>
             )}

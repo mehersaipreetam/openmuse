@@ -7,8 +7,9 @@
     "orientation": "default",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
+    "icon": "./assets/capybara.png",
     "ios": { "supportsTablet": true, "bundleIdentifier": "app.openmuse.mobile" },
-    "android": { "package": "app.openmuse.mobile" },
+    "android": { "package": "app.openmuse.mobile", "usesCleartextTraffic": true },
     "web": { "bundler": "metro", "name": "OpenMuse — a little room for everything" },
     "plugins": [
       "expo-document-picker",

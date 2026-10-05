@@ -1,14 +1,41 @@
 import { Platform } from "react-native";
 
-export const API_URL = (
+export let API_URL = (
   process.env.EXPO_PUBLIC_API_URL ||
-  (Platform.OS === "android" ? "http://10.0.2.2:8787" : "http://localhost:8787")
+  (Platform.OS === "android" ? "http://127.0.0.1:8787" : "http://localhost:8787")
 ).replace(/\/$/, "");
+
+export function setApiUrl(url: string) {
+  if (!url) return;
+  let formatted = url.trim().replace(/\/$/, "");
+  if (!/^https?:\/\//i.test(formatted)) {
+    formatted = `http://${formatted}`;
+  }
+  API_URL = formatted;
+}
+
+async function fetchApi(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    if (Platform.OS === "android" && !url.includes("127.0.0.1")) {
+      const fallback = url.replace(/^http:\/\/[^/]+/, "http://127.0.0.1:8787");
+      try {
+        const res = await fetch(fallback, init);
+        API_URL = "http://127.0.0.1:8787";
+        return res;
+      } catch {
+        throw err;
+      }
+    }
+    throw err;
+  }
+}
 
 export class MuseApi {
   constructor(readonly token: string) {}
   async request<T>(path: string, body?: unknown, method?: string): Promise<T> {
-    const response = await fetch(`${API_URL}${path}`, {
+    const response = await fetchApi(this.url(path), {
       method: method ?? (body === undefined ? "GET" : "POST"),
       headers: {
         Authorization: `Bearer ${this.token}`,
@@ -33,7 +60,7 @@ export class MuseApi {
 export async function createSession(
   accessKey?: string,
 ): Promise<{ token: string; mode: "sample" | "live" }> {
-  const response = await fetch(`${API_URL}/api/session`, {
+  const response = await fetchApi(`${API_URL}/api/session`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ accessKey }),

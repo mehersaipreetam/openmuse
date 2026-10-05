@@ -9,6 +9,7 @@
     "node": ">=22"
   },
   "scripts": {
+    "start:all": "./start.sh",
     "dev": "tsx watch apps/server/src/index.ts",
     "dev:demo": "tsx apps/server/src/demo/entry.ts",
     "dev:mobile": "pnpm --dir apps/mobile start",
